@@ -1,49 +1,51 @@
-const express = require('express');
-const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
-const { createClient } = require('@supabase/supabase-js');
-const cors = require('cors');
-require('dotenv').config();
+// index.js
+import express from "express";
+import multer from "multer";
+import fs from "fs";
+import { createClient } from "@supabase/supabase-js";
+import cors from "cors";
+import dotenv from "dotenv";
 
-const upload = multer({ dest: 'uploads/' });
+dotenv.config();
+
 const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(cors({ origin: "*" }));
+const upload = multer({ dest: "uploads/" });
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY,
+  { global: { fetch: (...args) => fetch(...args) } } // obligatoire pour Render Node 20+
+);
 
-app.get('/', (req, res) => res.send('🩷 Backend VoixDuCoeur en ligne 🩷'));
-
-// Upload audio
-app.post('/upload-audio', upload.single('audio'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu." });
-
-  const filePath = req.file.path;
-  const fileName = `${Date.now()}_${req.file.originalname}`;
+// POST /upload-audio
+app.post("/upload-audio", upload.single("audio"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu" });
 
   try {
+    const fileName = `${Date.now()}_${req.file.originalname}`;
+    const fileStream = fs.createReadStream(req.file.path);
+
+    // Upload vers Supabase Storage avec l'option duplex
     const { data, error } = await supabase.storage
-      .from('audios')
-      .upload(fileName, fs.createReadStream(filePath), {
+      .from("audios")
+      .upload(fileName, fileStream, {
         contentType: req.file.mimetype,
-        upsert: true
+        upsert: true,
+        duplex: "half", // ✅ la clé pour Node 20+
       });
 
-    // Supprimer fichier local
-    fs.unlinkSync(filePath);
-
+    fs.unlinkSync(req.file.path); // supprimer le fichier temporaire
     if (error) return res.status(500).json({ error: error.message });
 
     const { data: publicUrlData } = supabase.storage
-      .from('audios')
+      .from("audios")
       .getPublicUrl(fileName);
 
-    return res.json({ url: publicUrlData.publicUrl });
+    res.json({ url: publicUrlData.publicUrl });
   } catch (err) {
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    return res.status(500).json({ error: err.message });
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ error: err.message });
   }
 });
 
