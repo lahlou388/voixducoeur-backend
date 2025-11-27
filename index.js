@@ -1,3 +1,4 @@
+// index.js
 const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
@@ -13,13 +14,15 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const upload = multer({ dest: 'uploads/' });
 const app = express();
 
+app.use(cors({ origin: '*' })); // autorise tous les frontends
 app.use(express.json());
-app.use(cors({ origin: '*' })); // pour test, mettre ton domaine en prod
+app.use(express.urlencoded({ extended: true }));
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 app.get('/', (req, res) => res.send('🩷 Backend VoixDuCoeur en ligne 🩷'));
 
+// ------------------ Upload audio ------------------
 app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu." });
 
@@ -27,36 +30,43 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   const outputName = `${Date.now()}.webm`;
   const outputPath = path.join('uploads', outputName);
 
-  ffmpeg(inputPath)
-    .outputOptions(['-c:a libopus', '-b:a 64k', '-vn'])
-    .toFormat('webm')
-    .on('end', async () => {
-      try {
-        const { data, error } = await supabase.storage
-          .from('audios')
-          .upload(outputName, fs.createReadStream(outputPath), {
-            contentType: 'audio/webm',
-            upsert: true
-          });
+  try {
+    // Convertir avec ffmpeg
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .outputOptions(['-c:a libopus', '-b:a 64k', '-vn'])
+        .toFormat('webm')
+        .on('end', resolve)
+        .on('error', reject)
+        .save(outputPath);
+    });
 
-        fs.unlinkSync(inputPath);
-        fs.unlinkSync(outputPath);
+    // Upload sur Supabase
+    const { data, error } = await supabase.storage
+      .from('audios')
+      .upload(outputName, fs.createReadStream(outputPath), {
+        contentType: 'audio/webm',
+        upsert: true
+      });
 
-        if (error) return res.status(500).json({ error: error.message });
+    // Supprimer fichiers locaux
+    fs.unlinkSync(inputPath);
+    fs.unlinkSync(outputPath);
 
-        const { data: publicUrlData } = supabase.storage.from('audios').getPublicUrl(outputName);
-        res.json({ url: publicUrlData.publicUrl });
-      } catch (err) {
-        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        res.status(500).json({ error: err.message });
-      }
-    })
-    .on('error', (err) => {
-      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-      res.status(500).json({ error: err.message });
-    })
-    .save(outputPath);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const { data: publicUrlData } = supabase.storage
+      .from('audios')
+      .getPublicUrl(outputName);
+
+    res.json({ url: publicUrlData.publicUrl });
+
+  } catch (err) {
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    console.error("Erreur backend:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 4000;
