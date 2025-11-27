@@ -1,4 +1,5 @@
-// index.js
+// index.js - Backend complet VoixDuCoeur
+
 const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
@@ -14,15 +15,18 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const upload = multer({ dest: 'uploads/' });
 const app = express();
 
-app.use(cors({ origin: '*' })); // autorise tous les frontends
+// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cors({ origin: '*' })); // ⚠️ remplacer '*' par ton front si nécessaire
 
+// Supabase client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// Test route
 app.get('/', (req, res) => res.send('🩷 Backend VoixDuCoeur en ligne 🩷'));
 
-// ------------------ Upload audio ------------------
+// Route upload audio
 app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu." });
 
@@ -31,7 +35,7 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   const outputPath = path.join('uploads', outputName);
 
   try {
-    // Convertir avec ffmpeg
+    // Conversion en .webm
     await new Promise((resolve, reject) => {
       ffmpeg(inputPath)
         .outputOptions(['-c:a libopus', '-b:a 64k', '-vn'])
@@ -41,10 +45,12 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
         .save(outputPath);
     });
 
-    // Upload sur Supabase
-    const { data, error } = await supabase.storage
+    // Lire le fichier en Buffer (corrige l’erreur duplex Node 20+)
+    const fileBuffer = fs.readFileSync(outputPath);
+
+    const { data, error: uploadError } = await supabase.storage
       .from('audios')
-      .upload(outputName, fs.createReadStream(outputPath), {
+      .upload(outputName, fileBuffer, {
         contentType: 'audio/webm',
         upsert: true
       });
@@ -53,7 +59,7 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
     fs.unlinkSync(inputPath);
     fs.unlinkSync(outputPath);
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (uploadError) return res.status(500).json({ error: uploadError.message });
 
     const { data: publicUrlData } = supabase.storage
       .from('audios')
@@ -69,5 +75,6 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   }
 });
 
+// Lancer le serveur
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🎵 Backend audio lancé sur le port ${PORT}`));
