@@ -12,62 +12,74 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// CORS — autorise ton frontend
 app.use(cors({
   origin: 'https://camixe.click',
   methods: ['GET','POST','PUT','DELETE'],
   credentials: true
 }));
 
+// Limites pour gros fichiers audio (1 minute max ≈ 10MB)
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Multer pour upload
 const upload = multer({ 
   dest: 'uploads/',
   limits: { fileSize: 20 * 1024 * 1024 } // 20MB max
 });
 
+// Supabase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-app.get('/', (req, res) => res.send('🩷 API VoixDuCoeur backend est en ligne 🩷'));
+// Route test
+app.get('/', (req,res)=>res.send("🩷 Backend VoixDuCoeur OK 🩷"));
 
-app.post('/upload-audio', (req, res) => {
-  upload.single('audio')(req, res, async (err) => {
-    if (err) return res.status(400).json({ error: err.message });
-    if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu." });
+// Route upload audio
+app.post('/upload-audio', (req,res)=>{
+  upload.single('audio')(req,res, async (err)=>{
+    if(err) return res.status(400).json({error:err.message});
+    if(!req.file) return res.status(400).json({error:"Aucun fichier reçu."});
 
-    const webmPath = req.file.path;
-    const mp3Path = webmPath + '.mp3';
+    const inputPath = req.file.path;
+    const outputPath = inputPath + '.mp3'; // Conversion en MP3
 
-    ffmpeg(webmPath)
+    ffmpeg(inputPath)
+      .audioBitrate(64) // 64 kbps → fichier léger
       .toFormat('mp3')
-      .on('end', async () => {
+      .on('end', async ()=>{
         try {
-          const mp3Buffer = fs.readFileSync(mp3Path);
+          const buffer = fs.readFileSync(outputPath);
           const fileName = `${Date.now()}.mp3`;
+
           const { data, error } = await supabase.storage
             .from('audios')
-            .upload(fileName, mp3Buffer, { contentType: 'audio/mp3', upsert: true });
+            .upload(fileName, buffer, { contentType:'audio/mp3', upsert:true });
 
-          fs.unlinkSync(webmPath);
-          fs.unlinkSync(mp3Path);
+          fs.unlinkSync(inputPath);
+          fs.unlinkSync(outputPath);
 
-          if (error) return res.status(500).json({ error: error.message });
+          if(error) return res.status(500).json({error:error.message});
 
-          const { data: publicUrlData } = supabase.storage.from('audios').getPublicUrl(fileName);
+          const { data: publicUrlData } = supabase.storage
+            .from('audios')
+            .getPublicUrl(fileName);
+
           res.json({ url: publicUrlData.publicUrl });
-        } catch (err) {
-          if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
-          if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path);
-          res.status(500).json({ error: err.message });
+        } catch(e){
+          if(fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+          if(fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+          res.status(500).json({error:e.message});
         }
       })
-      .on('error', (err) => {
-        if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
-        res.status(500).json({ error: err.message });
+      .on('error',(e)=>{
+        if(fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+        res.status(500).json({error:e.message});
       })
-      .save(mp3Path);
+      .save(outputPath);
   });
 });
 
-const server = app.listen(PORT, () => console.log(`🎵 Serveur audio lancé sur le port ${PORT}`));
-server.setTimeout(2 * 60 * 1000);
+// Timeout serveur 2 minutes pour audio long
+const server = app.listen(PORT,()=>console.log(`🎵 Serveur lancé sur port ${PORT}`));
+server.setTimeout(2*60*1000);
