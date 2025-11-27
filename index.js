@@ -1,12 +1,10 @@
 // index.js
-import express from "express";
-import multer from "multer";
-import fs from "fs";
-import { createClient } from "@supabase/supabase-js";
-import cors from "cors";
-import dotenv from "dotenv";
-
-dotenv.config();
+const express = require("express");
+const multer = require("multer");
+const fs = require("fs");
+const cors = require("cors");
+const { createClient } = require("@supabase/supabase-js");
+require("dotenv").config();
 
 const app = express();
 app.use(cors({ origin: "*" }));
@@ -14,8 +12,7 @@ const upload = multer({ dest: "uploads/" });
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY,
-  { global: { fetch: (...args) => fetch(...args) } } // obligatoire pour Render Node 20+
+  process.env.SUPABASE_KEY
 );
 
 // POST /upload-audio
@@ -26,16 +23,18 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
     const fileName = `${Date.now()}_${req.file.originalname}`;
     const fileStream = fs.createReadStream(req.file.path);
 
-    // Upload vers Supabase Storage avec l'option duplex
+    // Upload vers Supabase Storage avec l'option duplex (Node 18/20)
     const { data, error } = await supabase.storage
       .from("audios")
       .upload(fileName, fileStream, {
         contentType: req.file.mimetype,
         upsert: true,
-        duplex: "half", // ✅ la clé pour Node 20+
+        duplex: "half", // 🔑 obligatoire
       });
 
-    fs.unlinkSync(req.file.path); // supprimer le fichier temporaire
+    // Supprimer fichier temporaire
+    fs.unlinkSync(req.file.path);
+
     if (error) return res.status(500).json({ error: error.message });
 
     const { data: publicUrlData } = supabase.storage
