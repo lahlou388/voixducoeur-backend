@@ -1,4 +1,3 @@
-// index.js
 const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
@@ -11,18 +10,26 @@ require('dotenv').config();
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
-const upload = multer({ dest: 'uploads/' });
+const PORT = process.env.PORT || 4000;
 
-// Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Middleware pour autoriser ton frontend et gérer les grosses requêtes
 app.use(cors({
-  origin: 'https://camixe.click', // ton frontend
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  origin: 'https://camixe.click',  // ton frontend
+  methods: ['GET','POST','PUT','DELETE'],
   credentials: true
 }));
 
-// Supabase
+// Augmente la limite des requêtes pour des fichiers volumineux (~50MB)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Multer avec limite de taille (1 minute d'audio ≈ 10MB selon codec)
+const upload = multer({ 
+  dest: 'uploads/',
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB max
+});
+
+// Configuration Supabase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // Route test
@@ -31,55 +38,55 @@ app.get('/', (req, res) => {
 });
 
 // Route upload audio
-app.post('/upload-audio', upload.single('audio'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu" });
+app.post('/upload-audio', (req, res) => {
+  upload.single('audio')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu." });
 
-  const webmPath = req.file.path;
-  const mp3Path = `${webmPath}.mp3`;
+    const webmPath = req.file.path;
+    const mp3Path = webmPath + '.mp3';
 
-  ffmpeg(webmPath)
-    .toFormat('mp3')
-    .on('end', async () => {
-      try {
-        const mp3Buffer = fs.readFileSync(mp3Path);
-        const fileName = `audio_${Date.now()}.mp3`;
+    ffmpeg(webmPath)
+      .toFormat('mp3')
+      .on('end', async () => {
+        try {
+          const mp3Buffer = fs.readFileSync(mp3Path);
+          const fileName = `${Date.now()}.mp3`;
 
-        const { data, error } = await supabase.storage
-          .from('audios')
-          .upload(fileName, mp3Buffer, {
-            contentType: 'audio/mp3',
-            upsert: true
-          });
+          const { data, error } = await supabase.storage
+            .from('audios')
+            .upload(fileName, mp3Buffer, {
+              contentType: 'audio/mp3',
+              upsert: true
+            });
 
-        // Supprime fichiers temporaires
-        fs.unlinkSync(webmPath);
-        fs.unlinkSync(mp3Path);
+          // Supprimer fichiers temporaires
+          fs.unlinkSync(webmPath);
+          fs.unlinkSync(mp3Path);
 
-        if (error) return res.status(500).json({ error: error.message });
+          if (error) return res.status(500).json({ error: error.message });
 
-        const { data: publicUrlData } = supabase.storage
-          .from('audios')
-          .getPublicUrl(fileName);
+          const { data: publicUrlData } = supabase.storage
+            .from('audios')
+            .getPublicUrl(fileName);
 
-        res.json({ url: publicUrlData.publicUrl });
-      } catch (err) {
+          res.json({ url: publicUrlData.publicUrl });
+        } catch (err) {
+          if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
+          if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path);
+          res.status(500).json({ error: err.message });
+        }
+      })
+      .on('error', (err) => {
         if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
-        if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path);
         res.status(500).json({ error: err.message });
-      }
-    })
-    .on('error', (err) => {
-      if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
-      res.status(500).json({ error: err.message });
-    })
-    .save(mp3Path);
+      })
+      .save(mp3Path);
+  });
 });
 
-// Route 404
-app.use((req, res) => {
-  res.status(404).json({ error: "Route non trouvée" });
+// Timeout serveur pour fichiers longs (1 minute max)
+const server = app.listen(PORT, () => {
+  console.log(`🎵 Serveur audio lancé sur le port ${PORT}`);
 });
-
-// Lancement serveur
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`🎵 Serveur audio lancé sur le port ${PORT}`));
+server.setTimeout(2 * 60 * 1000); // 2 minutes pour être safe
