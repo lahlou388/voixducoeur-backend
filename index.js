@@ -14,8 +14,7 @@ const upload = multer({ dest: 'uploads/' });
 const app = express();
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cors({ origin: 'https://camixe.click' }));
+app.use(cors({ origin: '*' })); // pour test, mettre ton domaine en prod
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
@@ -28,7 +27,6 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   const outputName = `${Date.now()}.webm`;
   const outputPath = path.join('uploads', outputName);
 
-  // Convertir en .webm avec opus
   ffmpeg(inputPath)
     .outputOptions(['-c:a libopus', '-b:a 64k', '-vn'])
     .toFormat('webm')
@@ -41,16 +39,12 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
             upsert: true
           });
 
-        // Supprimer fichiers locaux
         fs.unlinkSync(inputPath);
         fs.unlinkSync(outputPath);
 
         if (error) return res.status(500).json({ error: error.message });
 
-        const { data: publicUrlData } = supabase.storage
-          .from('audios')
-          .getPublicUrl(outputName);
-
+        const { data: publicUrlData } = supabase.storage.from('audios').getPublicUrl(outputName);
         res.json({ url: publicUrlData.publicUrl });
       } catch (err) {
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
